@@ -61,6 +61,7 @@ LLVM_ABI void initializeInsertCodePrefetchPass(PassRegistry &);
 LLVM_ABI void
 initializeBasicBlockSectionsProfileReaderWrapperPassPass(PassRegistry &);
 LLVM_ABI void initializeBasicBlockSectionsPass(PassRegistry &);
+LLVM_ABI void initializeDeduBBPass(PassRegistry &);
 LLVM_ABI void initializeBarrierNoopPass(PassRegistry &);
 LLVM_ABI void initializeBasicAAWrapperPassPass(PassRegistry &);
 LLVM_ABI void initializeBlockFrequencyInfoWrapperPassPass(PassRegistry &);

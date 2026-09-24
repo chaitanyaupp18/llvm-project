@@ -161,7 +161,7 @@ bool UnreachableMachineBlockElim::run(MachineFunction &F) {
   std::vector<MachineBasicBlock*> DeadBlocks;
   for (MachineBasicBlock &BB : F) {
     // Test for deadness.
-    if (!Reachable.count(&BB)) {
+    if (!Reachable.count(&BB) && !BB.hasAddressTaken()) {
       DeadBlocks.push_back(&BB);
 
       // Update dominator and loop info.

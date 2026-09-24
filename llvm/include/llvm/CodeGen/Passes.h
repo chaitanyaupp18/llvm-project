@@ -67,6 +67,10 @@ LLVM_ABI MachineFunctionPass *createGCEmptyBasicBlocksLegacyPass();
 /// basic blocks and is enabled with -fbasic-block-sections.
 LLVM_ABI MachineFunctionPass *createBasicBlockSectionsPass();
 
+/// createDeduBB Pass - This pass applies DeduBB tail-call deduplication
+/// directives (bbm/bbf) read from the file named by -dedubb-directives.
+LLVM_ABI MachineFunctionPass *createDeduBBPass();
+
 LLVM_ABI MachineFunctionPass *createBasicBlockPathCloningPass();
 
 /// createBasicBlockMatchingAndInferencePass - This pass enables matching

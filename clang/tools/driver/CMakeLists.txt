@@ -56,6 +56,7 @@ add_clang_tool(clang
 
 setup_host_tool(clang CLANG clang_exe clang_target)
 
+#target_link_libraries(clang PRIVATE "-Wl,-mllvm,-dedubb-directives=/home/propkern/c/tail-call/llvm-project/profiles/dedubb-clang-cold-bb-updated.txt")
 clang_target_link_libraries(clang
   PRIVATE
   clangBasic

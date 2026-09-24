@@ -1249,6 +1249,11 @@ void TargetPassConfig::addMachinePasses() {
       addPass(createMachineOutlinerPass(EnableMachineOutliner));
   }
 
+  // Apply DeduBB tail-call deduplication directives. This runs at the same late
+  // stage as the MachineOutliner so the inserted tail branches are expanded by
+  // the same later passes. It is a no-op unless -dedubb-directives is set.
+  addPass(createDeduBBPass());
+
   if (EnableGCEmptyBlocks)
     addPass(llvm::createGCEmptyBasicBlocksLegacyPass());
 

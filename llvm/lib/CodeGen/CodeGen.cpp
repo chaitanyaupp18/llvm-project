@@ -24,6 +24,7 @@ void llvm::initializeCodeGen(PassRegistry &Registry) {
   initializeBasicBlockPathCloningPass(Registry);
   initializeBasicBlockSectionsPass(Registry);
   initializeBasicBlockSectionsProfileReaderWrapperPassPass(Registry);
+  initializeDeduBBPass(Registry);
   initializeBranchFolderLegacyPass(Registry);
   initializeBranchRelaxationLegacyPass(Registry);
   initializeBreakFalseDepsLegacyPass(Registry);

@@ -2282,6 +2282,20 @@ public:
         "Target didn't implement TargetInstrInfo::insertOutlinedCall!");
   }
 
+  /// Returns true if this target implements \c insertDeduBBTailBranch, i.e. it
+  /// supports DeduBB tail-call basic block deduplication.
+  virtual bool supportsDeduBB() const { return false; }
+
+  /// Appends a tail branch to the external symbol \p MasterSym at the end of
+  /// \p MBB. Used by the DeduBB pass to fold a duplicate tail-call/return block
+  /// into its master copy. Modeled on \c insertOutlinedCall's tail-call path so
+  /// that the current stack frame is preserved.
+  virtual void insertDeduBBTailBranch(MachineBasicBlock &MBB,
+                                      StringRef MasterSym) const {
+    llvm_unreachable(
+        "Target didn't implement TargetInstrInfo::insertDeduBBTailBranch!");
+  }
+
   /// Insert an architecture-specific instruction to clear a register. If you
   /// need to avoid sideeffects (e.g. avoid XOR on x86, which sets EFLAGS), set
   /// \p AllowSideEffects to \p false.

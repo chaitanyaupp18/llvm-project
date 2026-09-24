@@ -16,7 +16,10 @@
 #include "bolt/Passes/ReorderAlgorithm.h"
 #include "bolt/Passes/ReorderFunctions.h"
 #include "bolt/Utils/CommandLineOpts.h"
+#include "bolt/Core/HashUtilities.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Format.h"
 #include <atomic>
 #include <cmath>
 #include <mutex>
@@ -243,6 +246,19 @@ static cl::opt<double> ProfileDensityThreshold(
     cl::Optional);
 
 } // namespace opts
+
+namespace opts {
+extern cl::opt<bool> TimeOpts;
+extern cl::opt<bool> NoFptrades;
+extern cl::OptionCategory BoltOptCategory;
+}
+
+static cl::opt<std::string> IntraFuncDedupCSVFile(
+    "intra-func-bb-dedup-csv",
+    cl::desc("Dump intra-function bb deduplication savings to a CSV file"),
+    cl::value_desc("filename"),
+    cl::init("dedup_savings.csv"),
+    cl::cat(opts::BoltOptCategory));
 
 namespace llvm {
 namespace bolt {
@@ -2081,6 +2097,214 @@ Error RemoveNops::runOnFunctions(BinaryContext &BC) {
   ParallelUtilities::runOnEachFunction(
       BC, ParallelUtilities::SchedulingPolicy::SP_INST_LINEAR, WorkFun,
       SkipFunc, "RemoveNops");
+  return Error::success();
+}
+
+} // namespace bolt
+} // namespace llvm
+
+namespace llvm {
+namespace bolt {
+
+bool IntraFuncDedup::isIdentical(BinaryContext &BC,
+                                const BinaryBasicBlock *BB1,
+                                const BinaryBasicBlock *BB2) const {
+  if (BB1->getNumNonPseudos() != BB2->getNumNonPseudos()) {
+    return false;
+  }
+
+  auto Comp = [](const MCSymbol *A, const MCSymbol *B) { return A == B; };
+
+  auto I1 = BB1->begin();
+  auto I2 = BB2->begin();
+  for (auto E1 = BB1->end(); I1 != E1; ++I1, ++I2) {
+    if (BC.MIB->isPseudo(*I1)) {
+      --I2;
+      continue;
+    }
+    if (BC.MIB->isPseudo(*I2)) {
+      --I1;
+      continue;
+    }
+
+    if (!BC.MIB->equals(*I1, *I2, Comp)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void IntraFuncDedup::runOnFunction(BinaryFunction &Function) {
+  BinaryContext &BC = Function.getBinaryContext();
+
+  uint64_t FuncBBSize = 0;
+  for (BinaryBasicBlock &BB : Function) {
+    FuncBBSize += BC.computeCodeSize(BB.begin(), BB.end());
+  }
+  TotalBBSize += FuncBBSize;
+
+  // BC.outs() << "IntraFuncDedup running on " << Function.getPrintName() << "\n";
+
+  // Bucket by hash of the block to quickly filter identical blocks.
+  std::unordered_map<std::string, std::vector<const BinaryBasicBlock *>> Buckets;
+
+  for (BinaryBasicBlock &BB : Function) {
+    if (BB.empty())
+      continue;
+
+    std::string Hash = hashBlock(BC, BB, [&](const MCOperand &Op) {
+      return hashInstOperand(BC, Op);
+    });
+
+    uint64_t Size = BC.computeCodeSize(BB.begin(), BB.end());
+    // BC.outs() << "BB " << BB.getName() << " Size=" << Size << " Hash=" << std::hash<std::string>{}(Hash) << "\n";
+
+    Buckets[Hash].push_back(&BB);
+  }
+
+  // Refine buckets with exact instruction matching to prevent hash collisions.
+  for (auto &[Hash, Bucket] : Buckets) {
+    std::vector<std::vector<const BinaryBasicBlock *>> ExactGroups;
+    for (const BinaryBasicBlock *BB : Bucket) {
+      bool Matched = false;
+      for (auto &Group : ExactGroups) {
+        if (isIdentical(BC, Group.front(), BB)) {
+          Group.push_back(BB);
+          Matched = true;
+          break;
+        }
+      }
+      if (!Matched) {
+        ExactGroups.push_back({BB});
+      }
+    }
+
+    for (const auto &Group : ExactGroups) {
+      uint64_t Count = Group.size();
+      if (Count < 2)
+        continue;
+
+      // Group[0] acts as the master copy.
+      const BinaryBasicBlock *Master = Group.front();
+      uint64_t Size = BC.computeCodeSize(Master->begin(), Master->end());
+      
+      bool HasStackOp = false;
+      bool HasCall = false;
+      bool IsTailCallOrReturn = false;
+
+      const MCInst &LastInst = Master->back();
+      if (BC.MIB->isTailCall(LastInst) || BC.MIB->isReturn(LastInst) ||
+          BC.MIB->isIndirectBranch(LastInst)) {
+        IsTailCallOrReturn = true;
+      }
+
+      for (const MCInst &Inst : *Master) {
+        if (BC.MIB->isPush(Inst) || BC.MIB->isPop(Inst) ||
+            BC.MIB->isStackAdjustment(Inst)) {
+          HasStackOp = true;
+        }
+        
+        bool UsesRSP = false;
+        for (unsigned I = 0, E = Inst.getNumOperands(); I != E; ++I) {
+          const MCOperand &Op = Inst.getOperand(I);
+          if (Op.isReg() && Op.getReg() == BC.MIB->getStackPointer()) {
+            UsesRSP = true;
+            break;
+          }
+        }
+        if (UsesRSP) HasStackOp = true;
+
+        if (BC.MIB->isCall(Inst) && !BC.MIB->isTailCall(Inst)) {
+          HasCall = true;
+        }
+      }
+
+      size_t NumericHash = std::hash<std::string>{}(Hash);
+    
+      uint64_t PatchSize = 0;
+      std::string PatchType;
+
+      if (IsTailCallOrReturn) {
+        PatchSize = BC.isAArch64() ? 4 : 5;
+        PatchType = "TailCall-Return";
+      } else if (!HasStackOp) {
+        PatchSize = HasCall ? 10 : 6;
+        PatchType = "Call-Return-Semantics";
+      } else {
+        PatchSize = 25;
+        PatchType = "Save-And-Jump";
+      }
+
+      if (Size <= PatchSize)
+        continue;
+
+      uint64_t Savings = (Count - 1) * (Size - PatchSize);
+      if (Savings > 0) {
+        TotalBytesSaved += Savings;
+        TotalFolds += (Count - 1);
+        TotalGroups++;
+        
+        {
+          std::lock_guard<std::mutex> Lock(CSVMutex);
+          Modified.insert(&Function);
+
+          // CSV Dump Format: FunctionName,MasterBB,DuplicateBB,Size,PatchType,Savings,MasterOffset,DuplicateOffset,Hash
+          for (size_t i = 1; i < Group.size(); ++i) {
+            std::string Row = Function.getPrintName() + "," +
+                              Master->getName().str() + "," + Group[i]->getName().str() + "," +
+                              std::to_string(Size) + "," + PatchType + "," + std::to_string(Size - PatchSize) + "," +
+                              std::to_string(Master->getOffset()) + "," + std::to_string(Group[i]->getOffset()) + "," +
+                              std::to_string(NumericHash);
+            CSVRows.push_back(Row);
+          }
+        }
+      }
+    }
+  }
+}
+
+Error IntraFuncDedup::runOnFunctions(BinaryContext &BC) {
+  TotalBytesSaved = 0;
+  TotalFolds = 0;
+  TotalGroups = 0;
+  TotalBBSize = 0;
+  CSVRows.clear();
+
+  ParallelUtilities::WorkFuncTy WorkFun = [&](BinaryFunction &BF) {
+    runOnFunction(BF);
+  };
+  ParallelUtilities::PredicateTy SkipFunc = [&](const BinaryFunction &BF) {
+    return !BF.isSimple();
+  };
+
+  ParallelUtilities::runOnEachFunction(
+      BC, ParallelUtilities::SchedulingPolicy::SP_TRIVIAL, WorkFun, SkipFunc,
+      "IntraFuncDedup");
+
+  if (TotalBytesSaved > 0) {
+    double SavingsPct = 0.0;
+    if (TotalBBSize > 0)
+      SavingsPct = (double)TotalBytesSaved / TotalBBSize * 100.0;
+
+    BC.outs() << "BOLT-INFO: Intra-function basic-block deduplication could save "
+              << TotalBytesSaved << " bytes out of " << TotalBBSize << " bytes ("
+              << format("%.2f", SavingsPct) << "%) by folding " << TotalFolds
+              << " basic blocks into " << TotalGroups << " master copies.\n";
+              
+    std::error_code EC;
+    raw_fd_ostream CSVOut(IntraFuncDedupCSVFile, EC, sys::fs::OF_Text);
+    if (!EC) {
+      CSVOut << "FunctionName,MasterBB,DuplicateBB,Size,PatchType,Savings,MasterOffset,DuplicateOffset,Hash\n";
+      for (const std::string &Row : CSVRows) {
+        CSVOut << Row << "\n";
+      }
+      BC.outs() << "BOLT-INFO: Dumped deduplication savings CSV to " << IntraFuncDedupCSVFile << "\n";
+    } else {
+      BC.errs() << "BOLT-ERROR: Could not open " << IntraFuncDedupCSVFile << " for writing: " << EC.message() << "\n";
+    }
+  }
+
   return Error::success();
 }
 

@@ -38,6 +38,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/AsmPrinterAnalysis.h"
 #include "llvm/CodeGen/BasicBlockSectionsProfileReader.h"
+#include "llvm/CodeGen/DeduBBDirectives.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/GCMetadataPrinter.h"
 #include "llvm/CodeGen/InsertCodePrefetch.h"
@@ -4832,6 +4833,32 @@ void AsmPrinter::emitBasicBlockStart(const MachineBasicBlock &MBB) {
       // NOTE: Want this comment at start of line, don't emit with AddComment.
       OutStreamer->emitRawComment(" %bb." + Twine(MBB.getNumber()) + ":",
                                   false);
+    }
+  }
+
+  // DeduBB: if this block is a master copy, emit a global symbol at its start so
+  // that folded duplicate blocks (in this and other modules) can branch to it.
+  if (const DeduBBDirectives &DD = DeduBBDirectives::get(); !DD.empty()) {
+    if (std::optional<UniqueBBID> ID = MBB.getBBID()) {
+      const DeduBBDirectives::Directive *D = nullptr;
+      if (ID->CloneID == 0) {
+        D = DD.lookup(MF->getName(), ID->BaseID);
+        if (!D) {
+          for (const GlobalAlias &A : MF->getFunction().getParent()->aliases()) {
+            if (A.getAliaseeObject() == &MF->getFunction()) {
+              if ((D = DD.lookup(A.getName(), ID->BaseID)))
+                break;
+            }
+          }
+        }
+      }
+      if (D && D->K == DeduBBDirectives::Master) {
+        MCSymbol *Sym = OutContext.getOrCreateSymbol(
+            "DeduBB.master." + Twine(D->MasterID));
+        OutStreamer->emitSymbolAttribute(Sym, MCSA_Global);
+        OutStreamer->emitSymbolAttribute(Sym, MCSA_Hidden);
+        OutStreamer->emitLabel(Sym);
+      }
     }
   }
 

@@ -11220,6 +11220,17 @@ void AArch64InstrInfo::buildOutlinedFrame(
   fixupPostOutline(MBB);
 }
 
+void AArch64InstrInfo::insertDeduBBTailBranch(MachineBasicBlock &MBB,
+                                              StringRef MasterSym) const {
+  // A tail branch to the master copy preserves the current frame, exactly like
+  // a tail-called outlined function (see insertOutlinedCall below). The linker
+  // inserts a range-extension thunk if the master is out of branch range.
+  const char *Sym = MBB.getParent()->createExternalSymbolName(MasterSym);
+  BuildMI(&MBB, DebugLoc(), get(AArch64::TCRETURNdi))
+      .addExternalSymbol(Sym)
+      .addImm(0);
+}
+
 MachineBasicBlock::iterator AArch64InstrInfo::insertOutlinedCall(
     Module &M, MachineBasicBlock &MBB, MachineBasicBlock::iterator &It,
     MachineFunction &MF, outliner::Candidate &C) const {

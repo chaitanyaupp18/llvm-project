@@ -650,6 +650,10 @@ public:
                      MachineBasicBlock::iterator &It, MachineFunction &MF,
                      outliner::Candidate &C) const override;
 
+  bool supportsDeduBB() const override { return true; }
+  void insertDeduBBTailBranch(MachineBasicBlock &MBB,
+                              StringRef MasterSym) const override;
+
   void buildClearRegister(Register Reg, MachineBasicBlock &MBB,
                           MachineBasicBlock::iterator Iter, DebugLoc &DL,
                           bool AllowSideEffects = true) const override;

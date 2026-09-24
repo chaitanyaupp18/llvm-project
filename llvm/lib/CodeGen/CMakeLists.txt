@@ -36,6 +36,7 @@ add_llvm_component_library(LLVMCodeGen
   BasicBlockPathCloning.cpp
   BasicBlockSectionsProfileReader.cpp
   BasicBlockMatchingAndInference.cpp
+  DeduBB.cpp
   CalcSpillWeights.cpp
   CallingConvLower.cpp
   CFGuardLongjmp.cpp

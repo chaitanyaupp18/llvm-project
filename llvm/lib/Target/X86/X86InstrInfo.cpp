@@ -10660,6 +10660,14 @@ MachineBasicBlock::iterator X86InstrInfo::insertOutlinedCall(
   return It;
 }
 
+void X86InstrInfo::insertDeduBBTailBranch(MachineBasicBlock &MBB,
+                                          StringRef MasterSym) const {
+  // A tail jump to the master copy preserves the current frame, exactly like a
+  // tail-called outlined function (see insertOutlinedCall above).
+  const char *Sym = MBB.getParent()->createExternalSymbolName(MasterSym);
+  BuildMI(&MBB, DebugLoc(), get(X86::TAILJMPd64)).addExternalSymbol(Sym);
+}
+
 void X86InstrInfo::buildClearRegister(Register Reg, MachineBasicBlock &MBB,
                                       MachineBasicBlock::iterator Iter,
                                       DebugLoc &DL,

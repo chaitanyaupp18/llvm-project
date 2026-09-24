@@ -25,6 +25,7 @@
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/DeduBBDirectives.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -49,6 +50,7 @@
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
@@ -549,8 +551,31 @@ MachineFunction::CreateMachineBasicBlock(const BasicBlock *BB,
   // Set BBID for `-basic-block-sections=list` and `-basic-block-address-map` to
   // allow robust mapping of profiles to basic blocks.
   if (Target.Options.BBAddrMap ||
-      Target.getBBSectionsType() == BasicBlockSection::List)
-    MBB->setBBID(BBID.has_value() ? *BBID : UniqueBBID{NextBBID++, 0});
+      Target.getBBSectionsType() == BasicBlockSection::List) {
+    UniqueBBID ID = BBID.has_value() ? *BBID : UniqueBBID{NextBBID++, 0};
+    MBB->setBBID(ID);
+
+    // Protect DeduBB master blocks from being deleted by optimizations.
+    if (const DeduBBDirectives &DD = DeduBBDirectives::get(); !DD.empty()) {
+      if (ID.CloneID == 0) {
+        const DeduBBDirectives::Directive *D = DD.lookup(getName(), ID.BaseID);
+        if (!D) {
+          if (const Function *F = &getFunction()) {
+            if (const Module *M = F->getParent()) {
+              for (const GlobalAlias &A : M->aliases()) {
+                if (A.getAliaseeObject() == F) {
+                  if ((D = DD.lookup(A.getName(), ID.BaseID)))
+                    break;
+                }
+              }
+            }
+          }
+        }
+        if (D && D->K == DeduBBDirectives::Master)
+          MBB->setMachineBlockAddressTaken();
+      }
+    }
+  }
   return MBB;
 }
 

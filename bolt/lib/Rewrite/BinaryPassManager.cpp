@@ -288,6 +288,15 @@ static cl::opt<bool> ShortenInstructions("shorten-instructions",
                                          cl::init(true),
                                          cl::cat(BoltOptCategory));
 
+static cl::opt<bool> IntraFuncDedupFlag(
+    "intra-func-bb-dedup",
+    cl::desc("estimate intra-function basic block deduplication savings"),
+    cl::init(false), cl::ZeroOrMore, cl::cat(BoltOptCategory));
+
+static cl::opt<bool> PrintIntraFuncDedup(
+    "print-func-bb-dedup", cl::desc("print intra-func dedup"), cl::init(false),
+    cl::Hidden, cl::cat(BoltOptCategory));
+
 cl::opt<bool>
     UpdateBranchProtection("update-branch-protection",
                            cl::desc("Rewrites pac-ret DWARF CFI instructions "
@@ -460,6 +469,9 @@ Error BinaryFunctionPassManager::runAllPasses(BinaryContext &BC) {
                        opts::ThreeWayBranchFlag);
 
   Manager.registerPass(std::make_unique<ReorderBasicBlocks>(PrintReordered));
+
+  Manager.registerPass(std::make_unique<IntraFuncDedup>(PrintIntraFuncDedup),
+                       opts::IntraFuncDedupFlag);
 
   Manager.registerPass(std::make_unique<EliminateUnreachableBlocks>(PrintUCE),
                        opts::EliminateUnreachable);

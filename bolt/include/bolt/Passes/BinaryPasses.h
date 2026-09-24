@@ -19,6 +19,7 @@
 #include "bolt/Profile/BoltAddressTranslation.h"
 #include "llvm/Support/CommandLine.h"
 #include <atomic>
+#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -133,6 +134,33 @@ public:
       : BinaryFunctionPass(PrintPass) {}
 
   const char *getName() const override { return "eliminate-unreachable"; }
+  bool shouldPrint(const BinaryFunction &BF) const override {
+    return BinaryFunctionPass::shouldPrint(BF) && Modified.count(&BF) > 0;
+  }
+  Error runOnFunctions(BinaryContext &) override;
+};
+
+/// Finds duplicate basic blocks ending in a tail-call, return, or indirect
+/// jump within the same function and estimates the savings of folding them.
+class IntraFuncDedup : public BinaryFunctionPass {
+  std::unordered_set<const BinaryFunction *> Modified;
+  std::atomic<uint64_t> TotalBytesSaved{0};
+  std::atomic<uint64_t> TotalFolds{0};
+  std::atomic<uint64_t> TotalGroups{0};
+  std::atomic<uint64_t> TotalBBSize{0};
+
+  std::mutex CSVMutex;
+  std::vector<std::string> CSVRows;
+
+  bool isIdentical(BinaryContext &BC, const BinaryBasicBlock *BB1,
+                   const BinaryBasicBlock *BB2) const;
+  void runOnFunction(BinaryFunction &Function);
+
+public:
+  IntraFuncDedup(const cl::opt<bool> &PrintPass)
+      : BinaryFunctionPass(PrintPass) {}
+
+  const char *getName() const override { return "intra-func-bb-dedup"; }
   bool shouldPrint(const BinaryFunction &BF) const override {
     return BinaryFunctionPass::shouldPrint(BF) && Modified.count(&BF) > 0;
   }
